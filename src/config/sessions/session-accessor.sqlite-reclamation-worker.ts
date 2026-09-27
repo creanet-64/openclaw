@@ -214,6 +214,7 @@ export class SqliteReclamationWorker {
   private workerThreadId?: number;
   private ended?: Promise<void>;
   private nativeExitProven = false;
+  private requestDispatched = false;
   private taskCustodyReleased = false;
   private closeRequested = false;
   private healthyCloseAcknowledged = false;
@@ -419,11 +420,15 @@ export class SqliteReclamationWorker {
           },
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
-          dispatch: () =>
+          dispatch: () => {
+            // A missing lease receipt is not proof that native work never began.
+            // Latch before dispatch, including a possibly ambiguous send failure.
+            this.requestDispatched = true;
             worker.postMessage(params.request(operationId, coordination), [
               ...params.transferList,
               ...(coordination.stateLifecycle ? [coordination.stateLifecycle] : []),
-            ]),
+            ]);
+          },
         }),
     );
     const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>
@@ -576,7 +581,15 @@ export class SqliteReclamationWorker {
     return (this.closing ??= (async () => {
       await this.active?.catch(() => {});
       const transport = this.transport;
-      if (transport) {
+      // Admission can fail and terminate a new transport before its first request.
+      // Such a dedicated worker cannot have opened storage; native exit must
+      // still be proven. Pooled tasks retain their existing custody protocol.
+      const unusedTransportStopped =
+        transport?.kind === "dedicated" &&
+        !this.requestDispatched &&
+        !this.lease &&
+        this.nativeExitProven;
+      if (transport && !unusedTransportStopped) {
         const worker = transport.channel;
         worker.ref();
         await runOpenClawAgentWorkerWrite(this.options, async () => {
@@ -650,6 +663,7 @@ export class SqliteReclamationWorker {
         });
       } else if (
         transport &&
+        !unusedTransportStopped &&
         (!this.cleanup?.settled || (transport.kind === "pooled" && !this.taskCustodyReleased))
       ) {
         throw new Error(
