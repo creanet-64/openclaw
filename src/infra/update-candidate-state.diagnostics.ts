@@ -3,6 +3,7 @@ import type { BackupProgressInfo } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
 import { formatErrorMessageWithCode } from "./errors.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 
 export const UPDATE_STATE_INSPECTION_PROGRESS_PREFIX = "State schema progress: ";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
@@ -62,8 +63,8 @@ export function createUpdateStateSnapshotReporter(
 export function createUpdateStateInspectionReporter(legacy = false) {
   let emittedBytes = 0;
   let exhausted = false;
-  return (progress: UpdateStateInspectionProgress) => {
-    if (exhausted) {
+  return (progress: UpdateStateInspectionProgress | undefined) => {
+    if (exhausted || progress === undefined) {
       return;
     }
     let line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`;
@@ -74,7 +75,15 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
     emittedBytes += Buffer.byteLength(line);
-    writeSync(2, line);
+    try {
+      writeSync(2, line);
+    } catch (error) {
+      // Progress is advisory: a full nonblocking stderr pipe must not fail a
+      // valid snapshot. Drop this update without retrying or changing stdout.
+      if (!hasNodeErrorCode(error, "EAGAIN") && !hasNodeErrorCode(error, "EWOULDBLOCK")) {
+        throw error;
+      }
+    }
   };
 }
 
