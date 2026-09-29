@@ -54,6 +54,47 @@ describe("update state inspection diagnostic reporter", () => {
     },
   );
 
+  it.each(["EAGAIN", "EWOULDBLOCK"])(
+    "counts only successful legacy writes after repeated %s backpressure",
+    (code) => {
+      writeSync.mockImplementation(() => {
+        throw Object.assign(new Error("temporarily unavailable"), { code });
+      });
+      const report = createUpdateStateInspectionReporter(true);
+      for (let index = 0; index < 1000; index++) {
+        report(progress);
+      }
+      writeSync.mockImplementation((_fd, line) => Buffer.byteLength(line));
+      report(progress);
+      expect(writeSync).toHaveBeenCalledTimes(1001);
+      expect(writeSync).toHaveBeenLastCalledWith(
+        2,
+        `State schema progress: ${JSON.stringify(progress)}\n`,
+      );
+    },
+  );
+
+  it("retries the legacy omission notice after backpressure without exhausting early", () => {
+    const report = createUpdateStateInspectionReporter(true);
+    const line = `State schema progress: ${JSON.stringify(progress)}\n`;
+    const capacity = Math.floor(12_000 / Buffer.byteLength(line));
+    writeSync.mockImplementation((_fd, value) => Buffer.byteLength(value));
+    for (let index = 0; index < capacity; index++) {
+      report(progress);
+    }
+    writeSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error("temporarily unavailable"), { code: "EAGAIN" });
+    });
+    report(progress);
+    report(progress);
+    report(progress);
+    expect(writeSync).toHaveBeenCalledTimes(capacity + 2);
+    expect(writeSync).toHaveBeenLastCalledWith(
+      2,
+      `State schema progress: ${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`,
+    );
+  });
+
   it.each(["EIO", "EBADF", "ENOSPC", "EPIPE"])("preserves non-backpressure %s failures", (code) => {
     const failure = Object.assign(new Error("write failed"), { code });
     writeSync.mockImplementationOnce(() => {
