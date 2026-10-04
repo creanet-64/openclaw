@@ -1,3 +1,4 @@
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -409,7 +410,19 @@ export function buildChatItems(
     }
     latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
   }
-  const keyedSegments = segments.filter(streamSegmentHasItemId);
+  // History can arrive before stream reconciliation retires a keyed commentary
+  // segment. The durable row owns that itemId; never render its live twin again.
+  const persistedCommentaryItemIds = new Set(
+    props.messages.flatMap((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      return identity ? [identity.itemId] : [];
+    }),
+  );
+  const keyedSegments = segments.filter(
+    (segment) => streamSegmentHasItemId(segment) &&
+      segment.persisted !== true &&
+      !persistedCommentaryItemIds.has(segment.itemId),
+  );
   const indexedSegments = segments.filter(
     (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
   );
