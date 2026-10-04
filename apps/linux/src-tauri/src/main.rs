@@ -31,6 +31,8 @@ mod native_browser_platform;
 mod native_device_settings;
 #[cfg(target_os = "linux")]
 mod native_image_save;
+#[cfg(target_os = "linux")]
+mod native_microphone;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -3218,6 +3220,10 @@ fn replace_main_webview_for_target(
         .map_err(|error| format!("Could not open the dashboard: {error}"))?;
     #[cfg(target_os = "linux")]
     native_attachment_files::install_webview(&view)?;
+    #[cfg(target_os = "linux")]
+    if startup_registration.is_some() {
+        native_microphone::install_webview(&view)?;
+    }
     if let Some(registration) = startup_registration {
         registration.start(view.clone(), move |view| {
             dashboard_document_ready(view, readiness_token.as_deref(), remote_generation);

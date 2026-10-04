@@ -2605,6 +2605,8 @@ fn replace_auxiliary(
         .map_err(|_| "Could not prepare Gateway window controls.")?;
     #[cfg(target_os = "linux")]
     crate::native_attachment_files::install_webview(&view)?;
+    #[cfg(target_os = "linux")]
+    crate::native_microphone::install_webview(&view)?;
     crate::window_chrome::observe_history(&view);
     registration.start(view.clone(), |_| {});
     Ok(view)

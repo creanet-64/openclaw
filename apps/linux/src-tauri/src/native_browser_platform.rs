@@ -58,6 +58,21 @@ pub async fn configure_browser(
     .await
 }
 
+/// WebKit falls back to a legacy charset for text documents whose server omits
+/// charset (notably exported Markdown). Keep browser text readable without
+/// changing the bytes or the encoding of documents that declare their own charset.
+#[cfg(target_os = "linux")]
+pub async fn set_default_charset_utf8(webview: &Webview) -> Result<(), String> {
+    native(webview, |platform| {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        if let Some(settings) = platform.inner().settings() {
+            settings.set_default_charset("UTF-8");
+        }
+        Ok(())
+    })
+    .await
+}
+
 async fn response<T>(
     response: tokio::sync::oneshot::Receiver<Result<T, String>>,
 ) -> Result<T, String> {
