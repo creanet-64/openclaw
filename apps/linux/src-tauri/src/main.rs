@@ -3658,7 +3658,13 @@ fn main() {
             {
                 window_chrome::publish(window);
             }
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+                )
+            {
+                // Recompute native panel bounds when the display scale changes.
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
                     app.state::<native_browser::NativeBrowserState>()

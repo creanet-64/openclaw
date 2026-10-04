@@ -2019,6 +2019,7 @@ pub async fn set_bounds(
     webview: &Webview,
     position: LogicalPosition<f64>,
     size: LogicalSize<f64>,
+    gtk_scale: (f64, f64),
 ) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return native(webview, move |platform| {
@@ -2048,8 +2049,15 @@ pub async fn set_bounds(
                 fixed
             }
         };
-        let (x, y) = (position.x.round() as i32, position.y.round() as i32);
-        let (width, height) = (size.width.round() as i32, size.height.round() as i32);
+        // Fractional Plasma scaling can differ from GTK's integer window scale.
+        let (x, y) = (
+            (position.x * gtk_scale.0).round() as i32,
+            (position.y * gtk_scale.1).round() as i32,
+        );
+        let (width, height) = (
+            (size.width * gtk_scale.0).round() as i32,
+            (size.height * gtk_scale.1).round() as i32,
+        );
         widget.set_size_request(width, height);
         // GtkFixed owns child allocation. A manual allocation here can leave the
         // native view painted at stale coordinates after the panel moves.
@@ -2059,6 +2067,7 @@ pub async fn set_bounds(
     .await;
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = gtk_scale;
         webview.set_position(position).map_err(|e| e.to_string())?;
         webview.set_size(size).map_err(|e| e.to_string())
     }
