@@ -52,3 +52,12 @@ it("still renders genuinely new keyed commentary", () => {
   ]);
   expect(items.some((item) => item.kind === "stream" && item.text === "New status")).toBe(true);
 });
+
+it("keeps a live segment when another run reuses the saved item ID", () => {
+  const items = render([
+    { text: "Current-run status", ts: 2200, runId: "run-current", itemId: "commentary-item-1" },
+  ]);
+  expect(items.some((item) => item.kind === "stream" && item.text === "Current-run status")).toBe(
+    true,
+  );
+});
