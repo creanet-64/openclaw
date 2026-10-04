@@ -66,15 +66,12 @@ describe("sidebar session feedback", () => {
     await vi.dynamicImportSettled();
     await vi.waitFor(() => expect(rosterActivityStore(context).snapshot.result).not.toBeNull());
     await sidebar.updateComplete;
-    expect(sidebar.agentUnreadCount("recent")).toBe(1);
-    expect(sidebar.agentUnreadCount("working")).toBe(0);
     await vi.waitFor(() =>
-      expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull(),
+      expect(sidebar.querySelectorAll(".sidebar-agent-card__menu-unread")).toHaveLength(1),
     );
     result.sessions[1] = { ...result.sessions[1]!, unread: false };
     await rosterActivityStore(context).refresh();
     await sidebar.updateComplete;
-    expect(sidebar.agentUnreadCount("recent")).toBe(0);
     await vi.waitFor(() =>
       expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).toBeNull(),
     );
