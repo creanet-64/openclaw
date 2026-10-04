@@ -2051,8 +2051,9 @@ pub async fn set_bounds(
         let (x, y) = (position.x.round() as i32, position.y.round() as i32);
         let (width, height) = (size.width.round() as i32, size.height.round() as i32);
         widget.set_size_request(width, height);
+        // GtkFixed owns child allocation. A manual allocation here can leave the
+        // native view painted at stale coordinates after the panel moves.
         fixed.move_(&widget, x, y);
-        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
         Ok(())
     })
     .await;
