@@ -3109,6 +3109,11 @@ fn replace_main_webview_for_target(
             open_external_browser(&browser_app, &url);
             NewWindowResponse::Deny
         });
+    // Register Wry's download handler for the dashboard. Without it WebKitGTK
+    // stores <a download> blobs in the process working directory, which is not
+    // a useful or predictable destination for a desktop user.
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_download(|_, _| true);
     let builder = match &registration {
         Some(registration) => registration.configure(builder),
         None => builder,
