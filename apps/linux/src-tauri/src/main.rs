@@ -23,6 +23,8 @@ mod gateway_ws;
 mod installer;
 mod keep_awake;
 mod keep_awake_platform;
+#[cfg(target_os = "linux")]
+mod native_attachment_files;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
@@ -3085,6 +3087,13 @@ fn replace_main_webview_for_target(
     if let Some(registration) = &registration {
         script.push('\n');
         script.push_str(&registration.script);
+        #[cfg(target_os = "linux")]
+        {
+            script.push('\n');
+            script.push_str(&native_attachment_files::initialization_script(
+                &url.origin().ascii_serialization(),
+            ));
+        }
     }
     let initial_url = registration
         .as_ref()
@@ -3375,6 +3384,8 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        #[cfg(target_os = "linux")]
+        native_device_settings::initialize_motion(app);
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()
             .into_owned();
@@ -3494,6 +3505,8 @@ fn main() {
             eprintln!("Deep-link registration unavailable: {error}");
         }
 
+        #[cfg(target_os = "linux")]
+        app.manage(native_attachment_files::DropState::default());
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
@@ -3529,6 +3542,8 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        #[cfg(target_os = "linux")]
+        native_attachment_files::native_attachment_files,
         native_browser_bridge::native_browser_request,
         native_device_settings::native_device_settings_request,
         gateway_windows::gateway_request,
@@ -3554,8 +3569,14 @@ fn main() {
         window_chrome::window_chrome_request
     ]);
 
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_webview_event(|webview, event| {
+        native_attachment_files::handle_webview_event(webview, event);
+    });
     let app = builder
         .on_window_event(|window, event| {
+            #[cfg(target_os = "linux")]
+            native_attachment_files::handle_window_event(window, event);
             if let Some(routes) = window
                 .app_handle()
                 .try_state::<gateway_windows::GatewayWindows>()

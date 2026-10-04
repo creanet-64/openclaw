@@ -1523,7 +1523,8 @@ impl GatewayWindows {
                     .local(false)
                     .remote(format!("{origin}/*"))
                     .webview(label)
-                    .permission("allow-gateway-request"),
+                    .permission("allow-gateway-request")
+                    .permission("allow-native-attachment-files"),
             )
             .map_err(|_| "Could not enable Gateway selection in this window.")?;
             self.routing
@@ -2559,6 +2560,13 @@ fn replace_auxiliary(
         route.auth_script.unwrap_or_default(),
         crate::window_chrome::initialization_script(Some(&route.url), false),
         registration.script
+    );
+    #[cfg(target_os = "linux")]
+    let script = format!(
+        "{script}\n{}",
+        crate::native_attachment_files::initialization_script(
+            &route.url.origin().ascii_serialization()
+        )
     );
     let browser_app = app.clone();
     let page_registration = registration.clone();

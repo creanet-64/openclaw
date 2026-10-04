@@ -622,3 +622,7 @@ failure leaves a visible degraded result for reconciliation. See the
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps
 card's Linux version and both download links.
+
+For the opt-in Ubuntu 24.04 x86_64 build with a locally patched WebKitGTK
+2.54.1 runtime, see [WebKitGTK AppImage qualification](WEBKITGTK_APPIMAGE.md).
+This is a separate packaging path, not a requirement for every Companion build.
