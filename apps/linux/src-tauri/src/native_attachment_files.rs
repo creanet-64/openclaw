@@ -1,6 +1,7 @@
 //! User-initiated Linux file attachments from the clipboard or native window drop.
 use base64::Engine as _;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -10,14 +11,55 @@ const MAX_FILES: usize = 8;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 const DROP_LIFETIME: Duration = Duration::from_secs(15);
+const PASTE_LIFETIME: Duration = Duration::from_millis(750);
 
 #[derive(Default)]
-pub struct DropState(Mutex<Option<PendingDrop>>);
+pub struct DropState(Mutex<AttachmentAuthority>);
+
+#[derive(Default)]
+struct AttachmentAuthority {
+    documents: HashMap<String, String>,
+    drops: HashMap<String, PendingDrop>,
+    pastes: HashMap<String, PendingPaste>,
+}
 
 struct PendingDrop {
     token: String,
+    document: String,
     paths: Vec<PathBuf>,
     created: Instant,
+}
+
+struct PendingPaste {
+    document: String,
+    created: Instant,
+}
+
+impl AttachmentAuthority {
+    fn take_paste(&mut self, label: &str) -> Result<String, String> {
+        match self.pastes.remove(label) {
+            Some(paste)
+                if paste.created.elapsed() <= PASTE_LIFETIME
+                    && self.documents.get(label) == Some(&paste.document) =>
+            {
+                Ok(paste.document)
+            }
+            _ => Err("A current native paste gesture is required".to_string()),
+        }
+    }
+
+    fn take_drop(&mut self, label: &str, token: &str) -> Result<(String, Vec<PathBuf>), String> {
+        match self.drops.remove(label) {
+            Some(drop)
+                if drop.token == token
+                    && drop.created.elapsed() <= DROP_LIFETIME
+                    && self.documents.get(label) == Some(&drop.document) =>
+            {
+                Ok((drop.document, drop.paths))
+            }
+            _ => Err("File drop expired or belongs to another window".to_string()),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -28,26 +70,110 @@ pub struct NativeAttachmentFile {
     bytes_base64: String,
 }
 
+/// A new native WebView replaces the prior document authority for this label.
+pub fn install_webview(webview: &Webview) -> Result<(), String> {
+    use gtk::prelude::WidgetExt;
+    let app = webview.app_handle().clone();
+    let label = webview.label().to_string();
+    let document = uuid::Uuid::new_v4().to_string();
+    {
+        let state = app.state::<DropState>();
+        let mut authority = state
+            .0
+            .lock()
+            .map_err(|_| "Attachment authority unavailable")?;
+        authority.documents.insert(label.clone(), document.clone());
+        authority.drops.remove(&label);
+        authority.pastes.remove(&label);
+    }
+    webview
+        .with_webview(move |platform| {
+            let app = app.clone();
+            let label = label.clone();
+            platform.inner().connect_key_press_event(move |_, event| {
+                let key = event.keyval();
+                let modifiers = event.state();
+                let paste = (key == gtk::gdk::keys::constants::v
+                    || key == gtk::gdk::keys::constants::V)
+                    && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                    && !modifiers.intersects(
+                        gtk::gdk::ModifierType::MOD1_MASK | gtk::gdk::ModifierType::SUPER_MASK,
+                    );
+                if paste {
+                    if let Some(state) = app.try_state::<DropState>() {
+                        if let Ok(mut authority) = state.0.lock() {
+                            if let Some(document) = authority.documents.get(&label).cloned() {
+                                authority.pastes.insert(
+                                    label.clone(),
+                                    PendingPaste {
+                                        document,
+                                        created: Instant::now(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                gtk::glib::Propagation::Proceed
+            });
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub fn rotate_document(app: &AppHandle, label: &str) {
+    if let Some(state) = app.try_state::<DropState>() {
+        if let Ok(mut authority) = state.0.lock() {
+            if authority.documents.contains_key(label) {
+                authority
+                    .documents
+                    .insert(label.to_string(), uuid::Uuid::new_v4().to_string());
+                authority.drops.remove(label);
+                authority.pastes.remove(label);
+            }
+        }
+    }
+}
+
+pub fn forget_webview(app: &AppHandle, label: &str) {
+    if let Some(state) = app.try_state::<DropState>() {
+        if let Ok(mut authority) = state.0.lock() {
+            authority.documents.remove(label);
+            authority.drops.remove(label);
+            authority.pastes.remove(label);
+        }
+    }
+}
+
 fn stage_drop(app: &AppHandle, label: &str, paths: &[PathBuf], x: f64, y: f64) {
-    if label != "main" || paths.is_empty() {
+    if paths.is_empty() {
+        return;
+    }
+    let Some(webview) = app.get_webview(label) else {
+        return;
+    };
+    if !crate::window_chrome::authorized(app, &webview) {
         return;
     }
     let token = uuid::Uuid::new_v4().to_string();
     let Some(state) = app.try_state::<DropState>() else {
         return;
     };
-    if let Ok(mut pending) = state.0.lock() {
-        *pending = Some(PendingDrop {
-            token: token.clone(),
-            paths: paths.to_vec(),
-            created: Instant::now(),
-        });
+    if let Ok(mut authority) = state.0.lock() {
+        let Some(document) = authority.documents.get(label).cloned() else {
+            return;
+        };
+        authority.drops.insert(
+            label.to_string(),
+            PendingDrop {
+                token: token.clone(),
+                document,
+                paths: paths.to_vec(),
+                created: Instant::now(),
+            },
+        );
     } else {
         return;
     }
-    let Some(webview) = app.get_webview(label) else {
-        return;
-    };
     let detail = serde_json::json!({"token": token, "x": x, "y": y});
     let _ = webview.eval(format!(
         "window.dispatchEvent(new CustomEvent('openclaw-native-attachment-drop', {{detail: {detail}}}));"
@@ -172,6 +298,18 @@ pub fn initialization_script(origin: &str) -> String {
     Object.defineProperty(drop, 'dataTransfer', {value: transfer});
     target.dispatchEvent(drop);
   }
+  function showFailure(error) {
+    const text = String(error);
+    console.warn('Native file attachment failed', text);
+    document.getElementById('openclaw-native-attachment-error')?.remove();
+    const notice = document.createElement('div');
+    notice.id = 'openclaw-native-attachment-error';
+    notice.setAttribute('role', 'alert');
+    notice.textContent = 'Could not attach selected file: ' + text;
+    notice.style.cssText = 'position:fixed;z-index:2147483647;left:1rem;bottom:1rem;max-width:32rem;padding:.75rem 1rem;border:1px solid #e55;border-radius:.5rem;background:#2b181b;color:#fff;box-shadow:0 4px 18px #0008';
+    document.body.append(notice);
+    setTimeout(() => notice.remove(), 10000);
+  }
   window.addEventListener('paste', (event) => {
     if (location.origin !== allowedOrigin || !inComposer(event.target)) return;
     const data = event.clipboardData;
@@ -184,7 +322,7 @@ pub fn initialization_script(origin: &str) -> String {
     event.stopImmediatePropagation();
     invoke('native_attachment_files', {token: null})
       .then((files) => forwardFiles(target, files))
-      .catch((error) => console.warn('Native file paste failed', error));
+      .catch(showFailure);
   }, true);
   window.addEventListener('openclaw-native-attachment-drop', (event) => {
     if (location.origin !== allowedOrigin) return;
@@ -197,7 +335,7 @@ pub fn initialization_script(origin: &str) -> String {
     if (!invoke) return;
     invoke('native_attachment_files', {token: detail.token})
       .then((files) => forwardFiles(target, files))
-      .catch((error) => console.warn('Native file drop failed', error));
+      .catch(showFailure);
   });
 })();"#;
     SCRIPT.replace(
@@ -209,31 +347,114 @@ pub fn initialization_script(origin: &str) -> String {
 #[tauri::command]
 pub async fn native_attachment_files(
     app: AppHandle,
+    webview: Webview,
     token: Option<String>,
 ) -> Result<Vec<NativeAttachmentFile>, String> {
-    let paths = if let Some(token) = token {
+    if !crate::window_chrome::authorized(&app, &webview) {
+        return Err("The attachment page is no longer authorized".to_string());
+    }
+    let label = webview.label().to_string();
+    let (document, paths) = if let Some(token) = token {
         let state = app.state::<DropState>();
-        let mut pending = state
+        let mut authority = state.0.lock().map_err(|_| "Drop state unavailable")?;
+        authority.take_drop(&label, &token)?
+    } else {
+        let document = {
+            let state = app.state::<DropState>();
+            let mut authority = state.0.lock().map_err(|_| "Paste state unavailable")?;
+            authority.take_paste(&label)?
+        };
+        (document, clipboard_paths(&app)?)
+    };
+    // Hold document authority through the file reads. Replacement invalidates
+    // the document first and therefore waits for any already-admitted read.
+    let read_app = app.clone();
+    let read_webview = webview.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::window_chrome::authorized(&read_app, &read_webview) {
+            return Err("The attachment page changed".to_string());
+        }
+        let state = read_app.state::<DropState>();
+        let authority = state
             .0
             .lock()
-            .map_err(|_| "Drop state unavailable".to_string())?;
-        match pending.take() {
-            Some(drop) if drop.token == token && drop.created.elapsed() <= DROP_LIFETIME => {
-                drop.paths
-            }
-            _ => return Err("File drop expired".to_string()),
+            .map_err(|_| "Attachment authority unavailable")?;
+        if authority.documents.get(&label) != Some(&document) {
+            return Err("The attachment document changed".to_string());
         }
-    } else {
-        clipboard_paths(&app)?
-    };
-    tauri::async_runtime::spawn_blocking(move || read_files(paths))
-        .await
-        .map_err(|_| "Could not read selected files".to_string())?
+        read_files(paths)
+    })
+    .await
+    .map_err(|_| "Could not read selected files".to_string())?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_authority_needs_native_paste_and_current_document() {
+        let mut authority = AttachmentAuthority::default();
+        authority
+            .documents
+            .insert("main".into(), "document-a".into());
+        assert!(authority.take_paste("main").is_err());
+        authority.pastes.insert(
+            "main".into(),
+            PendingPaste {
+                document: "document-a".into(),
+                created: Instant::now(),
+            },
+        );
+        assert_eq!(authority.take_paste("main").unwrap(), "document-a");
+        assert!(authority.take_paste("main").is_err());
+        authority.pastes.insert(
+            "main".into(),
+            PendingPaste {
+                document: "document-a".into(),
+                created: Instant::now(),
+            },
+        );
+        authority
+            .documents
+            .insert("main".into(), "document-b".into());
+        assert!(authority.take_paste("main").is_err());
+    }
+
+    #[test]
+    fn drop_token_cannot_cross_windows_or_replaced_documents() {
+        let mut authority = AttachmentAuthority::default();
+        authority
+            .documents
+            .insert("main".into(), "document-a".into());
+        authority
+            .documents
+            .insert("other".into(), "document-b".into());
+        authority.drops.insert(
+            "main".into(),
+            PendingDrop {
+                token: "token".into(),
+                document: "document-a".into(),
+                paths: vec![PathBuf::from("/tmp/example")],
+                created: Instant::now(),
+            },
+        );
+        assert!(authority.take_drop("other", "token").is_err());
+        assert!(authority.take_drop("main", "wrong").is_err());
+        authority.drops.insert(
+            "main".into(),
+            PendingDrop {
+                token: "token".into(),
+                document: "document-a".into(),
+                paths: vec![PathBuf::from("/tmp/example")],
+                created: Instant::now(),
+            },
+        );
+        authority
+            .documents
+            .insert("main".into(), "document-new".into());
+        assert!(authority.take_drop("main", "token").is_err());
+    }
 
     #[test]
     fn reads_a_user_selected_file_without_exposing_its_path() {

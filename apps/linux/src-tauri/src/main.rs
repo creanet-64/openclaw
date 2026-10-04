@@ -3058,6 +3058,8 @@ fn replace_main_webview_for_target(
         .map_err(|error| format!("Could not measure the dashboard: {error}"))?;
     // Replace only the dashboard document, retaining the native window, tray and geometry.
     if let Some(previous) = previous {
+        #[cfg(target_os = "linux")]
+        native_attachment_files::forget_webview(app, "main");
         native_browser_platform::detach_surface(&previous)?;
         previous
             .close()
@@ -3115,6 +3117,10 @@ fn replace_main_webview_for_target(
     let readiness_token = document_token.clone();
     let builder = builder
         .on_page_load(move |webview, payload| {
+            #[cfg(target_os = "linux")]
+            if matches!(payload.event(), PageLoadEvent::Started) {
+                native_attachment_files::rotate_document(webview.app_handle(), webview.label());
+            }
             let loaded = matches!(payload.event(), PageLoadEvent::Finished);
             let app = webview.app_handle().clone();
             if let Some(registration) = &registration {
@@ -3167,6 +3173,8 @@ fn replace_main_webview_for_target(
             Ok(view)
         })
         .map_err(|error| format!("Could not open the dashboard: {error}"))?;
+    #[cfg(target_os = "linux")]
+    native_attachment_files::install_webview(&view)?;
     if let Some(registration) = startup_registration {
         registration.start(view.clone(), move |view| {
             dashboard_document_ready(view, readiness_token.as_deref(), remote_generation);

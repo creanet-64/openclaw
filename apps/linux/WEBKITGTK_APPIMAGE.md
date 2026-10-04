@@ -35,7 +35,11 @@ With WebKitGTK **2.54.1**, the same GTK clipboard-image probe exposed an
 `image/png` file. That version alone did **not** fix Dolphin file clipboard
 or drop: URI clipboard entries still had no DOM `File`, and Tauri captured the
 native drop before the Gateway-served page received it. The Companion bridge
-handles those gestures separately.
+handles those gestures separately. File clipboard reads require a recent native
+Ctrl+V in the same WebView, and are single-use; a dashboard command alone cannot
+read clipboard-selected files. Drop tokens are scoped to their receiving WebView
+and current document. An error is shown in the chat window when the selected
+file cannot be attached.
 
 The AppImage must carry the matching WebKitGTK library, its three subprocesses,
 and its injected bundle. The first package carried the 2.54.1 library but

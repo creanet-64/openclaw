@@ -21,21 +21,87 @@ pub(crate) struct MotionPreference {
 fn preference_path(app: &impl Manager<tauri::Wry>) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
-        .map(|dir| dir.join("reduced-motion"))
+        .map(|dir| dir.join("companion-settings.sqlite"))
         .map_err(|error| format!("Could not resolve motion preference: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn read_motion(path: &std::path::Path) -> Result<Option<bool>, String> {
+    use rusqlite::OptionalExtension;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| format!("Could not read Companion settings: {error}"))?;
+    connection
+        .query_row(
+            "SELECT value FROM preferences WHERE key = 'reduced_motion'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.map(|value| value != 0))
+        .map_err(|error| format!("Could not read motion setting: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn write_motion(path: &std::path::Path, enabled: bool) -> Result<(), String> {
+    use rusqlite::params;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::create_dir_all(path.parent().ok_or("Invalid settings path")?)
+        .map_err(|error| format!("Could not create Companion settings directory: {error}"))?;
+    // The database is native app state, not an export. Protect it on first use.
+    if !path.exists() {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        match options.open(path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("Could not create Companion settings: {error}")),
+        }
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("Could not protect Companion settings: {error}"))?;
+    let mut connection = rusqlite::Connection::open(path)
+        .map_err(|error| format!("Could not open Companion settings: {error}"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not update Companion settings: {error}"))?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+        )
+        .map_err(|error| format!("Could not initialize Companion settings: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO preferences(key, value) VALUES('reduced_motion', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![i64::from(enabled)],
+        )
+        .map_err(|error| format!("Could not save motion setting: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not commit motion setting: {error}"))
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn initialize_motion(app: &mut tauri::App) {
     use gtk::prelude::GtkSettingsExt;
-    let enabled = preference_path(app)
+    let saved = preference_path(app)
         .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|value| value.trim() == "1")
-        .unwrap_or_else(|| {
-            std::env::var_os("OPENCLAW_REDUCED_MOTION").as_deref()
-                == Some(std::ffi::OsStr::new("1"))
-        });
+        .and_then(|path| read_motion(&path).ok().flatten());
+    // A prior test AppImage used this file. Read it only if no database exists;
+    // the next user change saves the authoritative SQLite value.
+    let legacy = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join("reduced-motion")).ok())
+        .map(|value| value.trim() == "1");
+    let enabled = saved.or(legacy).unwrap_or_else(|| {
+        std::env::var_os("OPENCLAW_REDUCED_MOTION").as_deref() == Some(std::ffi::OsStr::new("1"))
+    });
     let settings = gtk::Settings::default();
     let original_animations = settings
         .as_ref()
@@ -53,33 +119,7 @@ pub(crate) fn initialize_motion(app: &mut tauri::App) {
 
 #[cfg(target_os = "linux")]
 fn save_motion(app: &AppHandle, enabled: bool) -> Result<(), String> {
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = preference_path(app)?;
-    std::fs::create_dir_all(path.parent().ok_or("Invalid motion preference path")?)
-        .map_err(|error| format!("Could not create motion preference directory: {error}"))?;
-    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<(), String> {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options
-            .open(&temporary)
-            .map_err(|error| format!("Could not open motion preference: {error}"))?;
-        file.write_all(if enabled { b"1\n" } else { b"0\n" })
-            .map_err(|error| format!("Could not save motion preference: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("Could not sync motion preference: {error}"))?;
-        std::fs::rename(&temporary, &path)
-            .map_err(|error| format!("Could not commit motion preference: {error}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
+    write_motion(&preference_path(app)?, enabled)
 }
 
 #[cfg(target_os = "linux")]
@@ -87,6 +127,13 @@ pub(crate) fn toggle_initialization_script() -> &'static str {
     r#"
   (() => {
     const rowId = 'openclaw-companion-reduced-motion';
+    const motionCopy = () => {
+      const locale = document.documentElement.lang || navigator.language || 'en';
+      return locale.toLowerCase().startsWith('fr')
+        ? ['Réduire les animations', 'Arrête les animations de l’interface dans ce Companion.']
+        : ['Reduce animations', 'Stops interface animations in this Companion.'];
+    };
+
     let pending = false;
     const refresh = () => {
       const page = document.querySelector('openclaw-device-page');
@@ -101,17 +148,17 @@ pub(crate) fn toggle_initialization_script() -> &'static str {
         copy.className = 'settings-row__text';
         const title = document.createElement('span');
         title.className = 'settings-row__title';
-        title.textContent = 'Réduire les animations';
+        title.textContent = motionCopy()[0];
         const description = document.createElement('span');
         description.className = 'settings-row__desc';
-        description.textContent = 'Arrête les animations de l’interface dans ce Companion.';
+        description.textContent = motionCopy()[1];
         copy.append(title, description);
         const control = document.createElement('div');
         control.className = 'settings-row__control';
         const toggle = document.createElement('wa-switch');
         toggle.className = 'settings-toggle';
         toggle.setAttribute('size', 's');
-        toggle.setAttribute('aria-label', 'Réduire les animations');
+        toggle.setAttribute('aria-label', motionCopy()[0]);
         control.append(toggle);
         row.append(copy, control);
         group.append(row);
@@ -138,6 +185,10 @@ pub(crate) fn toggle_initialization_script() -> &'static str {
           }
         });
       }
+      const [motionTitle, motionDescription] = motionCopy();
+      row.querySelector('.settings-row__title').textContent = motionTitle;
+      row.querySelector('.settings-row__desc').textContent = motionDescription;
+      row.querySelector('wa-switch').setAttribute('aria-label', motionTitle);
       const state = window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__?.app?.reducedMotionEnabled;
       if (typeof state === 'boolean' && !pending) {
         row.querySelector('wa-switch').checked = state;
@@ -221,6 +272,25 @@ fn snapshot_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn motion_setting_survives_reopen_without_legacy_sidecar() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("openclaw-motion-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("companion-settings.sqlite");
+        assert_eq!(read_motion(&path).unwrap(), None);
+        write_motion(&path, true).unwrap();
+        assert_eq!(read_motion(&path).unwrap(), Some(true));
+        write_motion(&path, false).unwrap();
+        assert_eq!(read_motion(&path).unwrap(), Some(false));
+        assert!(!dir.join("reduced-motion").exists());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn off_snapshot_omits_optional_detail_and_unimplemented_permissions() {
         let value = snapshot_value(

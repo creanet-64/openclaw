@@ -4,6 +4,10 @@ The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Ga
 
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
 
+On Linux, copying a file from the file manager into the chat uses **Ctrl+V** in the active Companion window. Drag-and-drop is also supported; a rejected attachment displays an error in the window. The Reduce animations setting is saved in the Companion's local SQLite settings database.
+
+On Linux, press **Ctrl+Shift+R** to reload the Companion page without using the HTTP cache. This is useful when a stale page is suspected; it does not clear chat history or repair a server-side conversation-ordering issue.
+
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 
 Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.

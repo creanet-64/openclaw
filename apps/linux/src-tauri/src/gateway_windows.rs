@@ -2434,6 +2434,8 @@ fn open_profile_recovery(app: &AppHandle, intent: &Intent, error: &str) -> Resul
     }
     if let Some(previous) = app.get_webview(label) {
         crate::window_chrome::loading(&previous);
+        #[cfg(target_os = "linux")]
+        crate::native_attachment_files::forget_webview(app, label);
         crate::native_browser_platform::detach_surface(&previous)?;
         previous
             .close()
@@ -2580,6 +2582,10 @@ fn replace_auxiliary(
             NewWindowResponse::Deny
         })
         .on_page_load(move |view, payload| {
+            #[cfg(target_os = "linux")]
+            if matches!(payload.event(), PageLoadEvent::Started) {
+                crate::native_attachment_files::rotate_document(view.app_handle(), view.label());
+            }
             page_registration.page_load(
                 view,
                 payload.url(),
@@ -2592,6 +2598,8 @@ fn replace_auxiliary(
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare Gateway window controls.")?;
+    #[cfg(target_os = "linux")]
+    crate::native_attachment_files::install_webview(&view)?;
     crate::window_chrome::observe_history(&view);
     registration.start(view.clone(), |_| {});
     Ok(view)

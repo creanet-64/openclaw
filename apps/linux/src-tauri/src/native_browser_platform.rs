@@ -67,6 +67,16 @@ async fn response<T>(
         .map_err(|_| "The browser tab closed before the operation completed.".to_string())?
 }
 
+#[cfg(target_os = "linux")]
+pub async fn reload_bypass_cache(webview: &Webview) -> Result<(), String> {
+    native(webview, |platform| {
+        use webkit2gtk::WebViewExt;
+        platform.inner().reload_bypass_cache();
+        Ok(())
+    })
+    .await
+}
+
 async fn native<T: Send + 'static>(
     webview: &Webview,
     operation: impl FnOnce(tauri::webview::PlatformWebview) -> Result<T, String> + Send + 'static,
