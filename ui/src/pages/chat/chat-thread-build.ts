@@ -425,8 +425,7 @@ export function buildChatItems(
     const runId = normalizeOptionalString(segment.runId);
     return !persistedCommentary.some(
       (identity) =>
-        identity.itemId === itemId &&
-        (!identity.runId || !runId || identity.runId === runId),
+        identity.itemId === itemId && (!identity.runId || !runId || identity.runId === runId),
     );
   });
   const indexedSegments = segments.filter(

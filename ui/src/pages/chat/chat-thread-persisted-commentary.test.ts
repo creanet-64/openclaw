@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import { buildCachedChatItems } from "./chat-thread.ts";
 
-function render(streamSegments: Array<{ text: string; ts: number; runId: string; itemId: string }>) {
+function render(
+  streamSegments: Array<{ text: string; ts: number; runId: string; itemId: string }>,
+) {
   return buildCachedChatItems({
     paneId: "commentary-replay",
     sessionKey: "agent:test:main",
@@ -43,7 +45,9 @@ it("does not replay an earlier durable commentary as a live segment", () => {
   const items = render([
     { text: "Earlier status", ts: 1100, runId: "run-earlier", itemId: "commentary-item-1" },
   ]);
-  expect(items.some((item) => item.kind === "stream" && item.text === "Earlier status")).toBe(false);
+  expect(items.some((item) => item.kind === "stream" && item.text === "Earlier status")).toBe(
+    false,
+  );
 });
 
 it("still renders genuinely new keyed commentary", () => {
