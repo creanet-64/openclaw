@@ -95,14 +95,6 @@ struct Viewport {
 }
 
 impl Viewport {
-    /// Derive CSS-to-GTK conversion from the live viewport, not a fixed KDE scale.
-    fn gtk_scale(self, physical_width: u32, physical_height: u32, window_scale: f64) -> (f64, f64) {
-        (
-            f64::from(physical_width) / window_scale / self.width,
-            f64::from(physical_height) / window_scale / self.height,
-        )
-    }
-
     fn valid(self) -> bool {
         self.width.is_finite() && self.height.is_finite() && self.width > 0.0 && self.height > 0.0
     }
@@ -256,14 +248,14 @@ impl BrowserHost {
                 });
                 item.rect
                     .clipped(viewport.width, viewport.height)
-                    .map(|rect| (rect, viewport.gtk_scale(size.width, size.height, scale)))
+                    .map(|rect| (rect, (viewport.width, viewport.height)))
             });
-            if let Some((rect, gtk_scale)) = bounds {
+            if let Some((rect, viewport_size)) = bounds {
                 platform::set_bounds(
                     &view,
                     LogicalPosition::new(rect.x, rect.y),
                     LogicalSize::new(rect.width, rect.height),
-                    gtk_scale,
+                    viewport_size,
                 )
                 .await?;
                 if app.get_webview("main").is_some_and(|dashboard| {
@@ -903,13 +895,6 @@ mod tests {
             width: 1200.0,
             height: 800.0,
         };
-        assert_eq!(normal.gtk_scale(1200, 800, 1.0), (1.0, 1.0));
-        let fractional = Viewport {
-            width: 800.0,
-            height: 600.0,
-        };
-        assert_eq!(fractional.gtk_scale(1200, 900, 1.0), (1.5, 1.5));
-        assert_eq!(normal.gtk_scale(2400, 1600, 2.0), (1.0, 1.0));
         assert!(!Viewport {
             width: 0.0,
             height: 800.0

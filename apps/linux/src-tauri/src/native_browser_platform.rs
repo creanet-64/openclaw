@@ -2015,11 +2015,19 @@ pub async fn prepare_surface(webview: &Webview) -> Result<(), String> {
     }
 }
 
+/// Convert CSS panel coordinates using the actual GTK overlay allocation.
+fn css_to_gtk_scale(viewport: (f64, f64), surface: (i32, i32)) -> (f64, f64) {
+    (
+        f64::from(surface.0) / viewport.0,
+        f64::from(surface.1) / viewport.1,
+    )
+}
+
 pub async fn set_bounds(
     webview: &Webview,
     position: LogicalPosition<f64>,
     size: LogicalSize<f64>,
-    gtk_scale: (f64, f64),
+    viewport_size: (f64, f64),
 ) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return native(webview, move |platform| {
@@ -2049,26 +2057,52 @@ pub async fn set_bounds(
                 fixed
             }
         };
-        // Fractional Plasma scaling can differ from GTK's integer window scale.
-        let (x, y) = (
-            (position.x * gtk_scale.0).round() as i32,
-            (position.y * gtk_scale.1).round() as i32,
-        );
-        let (width, height) = (
-            (size.width * gtk_scale.0).round() as i32,
-            (size.height * gtk_scale.1).round() as i32,
-        );
-        widget.set_size_request(width, height);
-        // GtkFixed owns child allocation. A manual allocation here can leave the
-        // native view painted at stale coordinates after the panel moves.
-        fixed.move_(&widget, x, y);
+        // Use the live GTK overlay allocation, not the window physical size:
+        // those can disagree under Wayland fractional scaling. GtkFixed can
+        // otherwise grow beyond the dashboard and intercept unrelated input.
+        let overlay = fixed
+            .parent()
+            .ok_or("The browser overlay is unavailable.")?;
+        let allocation = overlay.allocation();
+        let (surface_width, surface_height) = (allocation.width(), allocation.height());
+        if surface_width <= 0 || surface_height <= 0 {
+            return Err("The browser overlay has no size.".into());
+        }
+        let (scale_x, scale_y) = css_to_gtk_scale(viewport_size, (surface_width, surface_height));
+        let x = (position.x * scale_x).round() as i32;
+        let y = (position.y * scale_y).round() as i32;
+        let width = (size.width * scale_x).round() as i32;
+        let height = (size.height * scale_y).round() as i32;
+        // A periodic present of unchanged bounds must not force GTK and WebKit
+        // to reallocate the whole dashboard: that stalls typing and hit tests.
+        if widget.size_request() != (width, height) {
+            widget.set_size_request(width, height);
+        }
+        if fixed.child_property::<i32>(&widget, "x") != x
+            || fixed.child_property::<i32>(&widget, "y") != y
+        {
+            fixed.move_(&widget, x, y);
+        }
         Ok(())
     })
     .await;
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = gtk_scale;
+        let _ = viewport_size;
         webview.set_position(position).map_err(|e| e.to_string())?;
         webview.set_size(size).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::css_to_gtk_scale;
+
+    #[test]
+    fn browser_scale_uses_the_allocated_gtk_overlay() {
+        assert_eq!(css_to_gtk_scale((1200.0, 800.0), (1200, 800)), (1.0, 1.0));
+        assert_eq!(css_to_gtk_scale((800.0, 600.0), (1200, 900)), (1.5, 1.5));
+        // A stale physical window size must not determine the child geometry.
+        assert_eq!(css_to_gtk_scale((800.0, 600.0), (800, 600)), (1.0, 1.0));
     }
 }
