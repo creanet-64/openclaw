@@ -3109,11 +3109,43 @@ fn replace_main_webview_for_target(
             open_external_browser(&browser_app, &url);
             NewWindowResponse::Deny
         });
-    // Register Wry's download handler for the dashboard. Without it WebKitGTK
-    // stores <a download> blobs in the process working directory, which is not
-    // a useful or predictable destination for a desktop user.
+    // WebKitGTK otherwise saves <a download> blobs in the process working
+    // directory without asking the user where to put them.
     #[cfg(target_os = "linux")]
-    let builder = builder.on_download(|_, _| true);
+    let builder = builder.on_download(|webview, event| {
+        use gtk::prelude::*;
+        if let tauri::webview::DownloadEvent::Requested { destination, .. } = event {
+            let parent = webview.window().gtk_window().ok();
+            let chooser = gtk::FileChooserNative::new(
+                Some("Save download"),
+                parent
+                    .as_ref()
+                    .map(|window| window.upcast_ref::<gtk::Window>()),
+                gtk::FileChooserAction::Save,
+                Some("Save"),
+                Some("Cancel"),
+            );
+            if let Some(folder) = destination.parent() {
+                chooser.set_current_folder(folder);
+            }
+            chooser.set_current_name(
+                destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download"),
+            );
+            chooser.set_do_overwrite_confirmation(true);
+            if chooser.run() == gtk::ResponseType::Accept {
+                if let Some(path) = chooser.filename() {
+                    *destination = path;
+                    return true;
+                }
+            }
+            return false;
+        }
+        true
+    });
     let builder = match &registration {
         Some(registration) => registration.configure(builder),
         None => builder,
