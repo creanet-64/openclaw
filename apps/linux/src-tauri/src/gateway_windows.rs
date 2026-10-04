@@ -1518,15 +1518,20 @@ impl GatewayWindows {
             !state.granted.contains(&(label.to_string(), origin.clone()))
         };
         if grant {
-            app.add_capability(
-                CapabilityBuilder::new(format!("gateways-{}", uuid::Uuid::new_v4()))
-                    .local(false)
-                    .remote(format!("{origin}/*"))
-                    .webview(label)
-                    .permission("allow-gateway-request")
-                    .permission("allow-native-attachment-files"),
-            )
-            .map_err(|_| "Could not enable Gateway selection in this window.")?;
+            let capability = CapabilityBuilder::new(format!("gateways-{}", uuid::Uuid::new_v4()))
+                .local(false)
+                .remote(format!("{origin}/*"))
+                .webview(label)
+                .permission("allow-gateway-request")
+                .permission("allow-native-attachment-files");
+            #[cfg(target_os = "linux")]
+            let capability = if label == "main" {
+                capability.permission("allow-native-image-save")
+            } else {
+                capability
+            };
+            app.add_capability(capability)
+                .map_err(|_| "Could not enable Gateway selection in this window.")?;
             self.routing
                 .lock()
                 .map_err(|_| STALE)?

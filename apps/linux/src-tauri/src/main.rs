@@ -29,6 +29,8 @@ mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
 mod native_device_settings;
+#[cfg(target_os = "linux")]
+mod native_image_save;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -3095,6 +3097,10 @@ fn replace_main_webview_for_target(
             script.push_str(&native_attachment_files::initialization_script(
                 &url.origin().ascii_serialization(),
             ));
+            script.push('\n');
+            script.push_str(&native_image_save::initialization_script(
+                &url.origin().ascii_serialization(),
+            ));
         }
     }
     let initial_url = registration
@@ -3589,6 +3595,8 @@ fn main() {
         gateway_action,
         #[cfg(target_os = "linux")]
         native_attachment_files::native_attachment_files,
+        #[cfg(target_os = "linux")]
+        native_image_save::native_image_save,
         native_browser_bridge::native_browser_request,
         native_device_settings::native_device_settings_request,
         gateway_windows::gateway_request,
