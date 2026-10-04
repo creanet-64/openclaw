@@ -77,6 +77,11 @@ pub async fn native_image_save(
                 Some("Save"),
                 Some("Cancel"),
             );
+            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                if home.is_dir() {
+                    chooser.set_current_folder(&home);
+                }
+            }
             chooser.set_current_name(&file_name);
             chooser.set_do_overwrite_confirmation(true);
             let destination = (chooser.run() == gtk::ResponseType::Accept)
