@@ -46,7 +46,7 @@ and its injected bundle. The first package carried the 2.54.1 library but
 packaged older helpers. A subsequent package included the correct helpers yet
 failed outside the build container: release WebKit had compiled in an absolute
 `/opt/.../WebKitNetworkProcess` path and ignored `WEBKIT_EXEC_PATH`. The patch in
-[`patches/webkitgtk-2.54.1-appimage-runtime.patch`](patches/webkitgtk-2.54.1-appimage-runtime.patch)
+[`patches/webkitgtk-2.54.1-appimage-runtime.diff`](patches/webkitgtk-2.54.1-appimage-runtime.diff)
 makes release WebKit honor that variable and gives its Bubblewrap sandbox
 access to the AppImage mount (`APPDIR`). Both changes are needed. They do not
 disable the sandbox.
@@ -67,7 +67,7 @@ mkdir -p webkit-build-source
 # Extract into an isolated directory; the archive creates webkitgtk-2.54.1/.
 tar -xJf webkitgtk-2.54.1.tar.xz -C webkit-build-source
 patch --directory=webkit-build-source/webkitgtk-2.54.1 --strip=1 \
-  < apps/linux/patches/webkitgtk-2.54.1-appimage-runtime.patch
+  < apps/linux/patches/webkitgtk-2.54.1-appimage-runtime.diff
 cmake -S webkit-build-source/webkitgtk-2.54.1 -B webkit-build \
   -G Ninja -DPORT=GTK -DUSE_GTK4=OFF -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/usr \
