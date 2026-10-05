@@ -15,10 +15,18 @@ target_exec="$appdir/$exec_rel"
 
 [[ -f "$appdir/AppRun" ]] || { echo "AppRun missing from $appdir" >&2; exit 1; }
 [[ -d "$appdir/usr/lib" ]] || { echo "AppDir libraries missing" >&2; exit 1; }
-if ! find "$appdir/usr/lib" -name "libwebkit2gtk-4.1.so*" -print -quit | grep -q .; then
-  echo "WebKitGTK library missing from AppDir; bundle the matching 2.54.1 library first" >&2
-  exit 1
-fi
+# linuxdeploy can choose the distribution's WebKit even when the custom
+# pkg-config path was used at build time. Stage and verify both matching
+# runtime libraries before adding the helper processes.
+for name in libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0; do
+  source_lib="$prefix/lib/x86_64-linux-gnu/$name"
+  target_lib="$appdir/usr/lib/$name"
+  install -m 0755 "$source_lib" "$target_lib"
+  cmp -s "$source_lib" "$target_lib" || {
+    echo "WebKit runtime staging mismatch: $name" >&2
+    exit 1
+  }
+done
 mkdir -p "$target_exec/injected-bundle"
 for name in WebKitWebProcess WebKitNetworkProcess WebKitGPUProcess; do
   install -m 0755 "$source_exec/$name" "$target_exec/$name"

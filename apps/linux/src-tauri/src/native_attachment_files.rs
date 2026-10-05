@@ -2,6 +2,7 @@
 use base64::Engine as _;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,6 +37,18 @@ struct PendingPaste {
 }
 
 impl AttachmentAuthority {
+    fn with_document<T>(
+        &self,
+        label: &str,
+        document: &str,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        if self.documents.get(label).map(String::as_str) != Some(document) {
+            return Err("The document changed before the native operation".to_string());
+        }
+        operation()
+    }
+
     fn take_paste(&mut self, label: &str) -> Result<String, String> {
         match self.pastes.remove(label) {
             Some(paste)
@@ -229,6 +242,47 @@ fn clipboard_paths(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
         .map_err(|_| "Clipboard did not respond".to_string())
 }
 
+pub(crate) fn capture_document(app: &AppHandle, label: &str) -> Result<String, String> {
+    let state = app.state::<DropState>();
+    let authority = state
+        .0
+        .lock()
+        .map_err(|_| "Attachment authority unavailable")?;
+    authority
+        .documents
+        .get(label)
+        .cloned()
+        .ok_or_else(|| "The document is unavailable".to_string())
+}
+
+pub(crate) fn with_document_authority<T>(
+    app: &AppHandle,
+    label: &str,
+    document: &str,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let state = app.state::<DropState>();
+    let authority = state
+        .0
+        .lock()
+        .map_err(|_| "Attachment authority unavailable")?;
+    // Keep the authority guard through the final effect, so a replacement cannot
+    // rotate document authority between this check and the write.
+    authority.with_document(label, document, operation)
+}
+
+fn read_bounded(mut file: impl Read, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "A selected file cannot be read".to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("Selected files exceed the attachment size limit".to_string());
+    }
+    Ok(bytes)
+}
+
 fn read_files(paths: Vec<PathBuf>) -> Result<Vec<NativeAttachmentFile>, String> {
     if paths.is_empty() {
         return Ok(Vec::new());
@@ -239,17 +293,23 @@ fn read_files(paths: Vec<PathBuf>) -> Result<Vec<NativeAttachmentFile>, String> 
     let mut total = 0_u64;
     let mut result = Vec::with_capacity(paths.len());
     for path in paths {
-        let metadata =
-            std::fs::metadata(&path).map_err(|_| "A selected file cannot be read".to_string())?;
+        let file =
+            std::fs::File::open(&path).map_err(|_| "A selected file cannot be read".to_string())?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "A selected file cannot be read".to_string())?;
         if !metadata.is_file() {
             return Err("Directories cannot be attached".to_string());
         }
-        total = total.saturating_add(metadata.len());
-        if metadata.len() > MAX_FILE_BYTES || total > MAX_BATCH_BYTES {
+        let remaining = MAX_BATCH_BYTES - total;
+        let limit = MAX_FILE_BYTES.min(remaining);
+        if metadata.len() > limit {
             return Err("Selected files exceed the attachment size limit".to_string());
         }
-        let bytes =
-            std::fs::read(&path).map_err(|_| "A selected file cannot be read".to_string())?;
+        // The opened file can grow after metadata inspection. Limit actual I/O,
+        // not just the size that was reported before the read.
+        let bytes = read_bounded(file, limit)?;
+        total += bytes.len() as u64;
         let (content_type, _) =
             gtk::gio::content_type_guess(Some(&path), &bytes[..bytes.len().min(4096)]);
         let mime_type = gtk::gio::content_type_get_mime_type(&content_type)
@@ -481,6 +541,38 @@ mod tests {
     fn rejects_directories_and_oversized_batches() {
         assert!(read_files(vec![std::env::temp_dir()]).is_err());
         assert!(read_files(vec![PathBuf::from("ignored"); MAX_FILES + 1]).is_err());
+    }
+
+    #[test]
+    fn replaced_document_cannot_complete_native_effect() {
+        let mut authority = AttachmentAuthority::default();
+        authority.documents.insert("main".into(), "first".into());
+        assert_eq!(
+            authority.with_document("main", "first", || Ok(7)).unwrap(),
+            7
+        );
+        authority.documents.insert("main".into(), "second".into());
+        let mut effected = false;
+        assert!(authority
+            .with_document("main", "first", || {
+                effected = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!effected);
+    }
+
+    #[test]
+    fn actual_read_limit_rejects_growth_past_reported_size() {
+        let bytes = std::io::Cursor::new(vec![1_u8, 2, 3, 4]);
+        assert_eq!(
+            read_bounded(bytes, 3).unwrap_err(),
+            "Selected files exceed the attachment size limit"
+        );
+        assert_eq!(
+            read_bounded(std::io::Cursor::new(vec![1_u8, 2, 3]), 3).unwrap(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]

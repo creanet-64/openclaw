@@ -186,12 +186,17 @@ pub(crate) fn toggle_initialization_script() -> &'static str {
         });
       }
       const [motionTitle, motionDescription] = motionCopy();
-      row.querySelector('.settings-row__title').textContent = motionTitle;
-      row.querySelector('.settings-row__desc').textContent = motionDescription;
-      row.querySelector('wa-switch').setAttribute('aria-label', motionTitle);
+      const title = row.querySelector('.settings-row__title');
+      const description = row.querySelector('.settings-row__desc');
+      const switchElement = row.querySelector('wa-switch');
+      if (title.textContent !== motionTitle) title.textContent = motionTitle;
+      if (description.textContent !== motionDescription) description.textContent = motionDescription;
+      if (switchElement.getAttribute('aria-label') !== motionTitle) {
+        switchElement.setAttribute('aria-label', motionTitle);
+      }
       const state = window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__?.app?.reducedMotionEnabled;
       if (typeof state === 'boolean' && !pending) {
-        row.querySelector('wa-switch').checked = state;
+        if (switchElement.checked !== state) switchElement.checked = state;
       }
     };
     let scheduled = false;

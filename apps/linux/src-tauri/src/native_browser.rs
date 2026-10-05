@@ -232,6 +232,23 @@ impl BrowserHost {
     }
 
     async fn layout(&self, app: &AppHandle) -> Result<(), String> {
+        if self.presentations.is_empty() {
+            // A hidden tab may remain alive for reopening, but its GTK overlay
+            // must not remain around the primary dashboard after the last panel
+            // closes. Reattach the surface only when a tab is presented again.
+            for tab in &self.tabs {
+                if let Some(view) = app.get_webview(&tab.label) {
+                    view.hide().map_err(|error| error.to_string())?;
+                }
+            }
+            if let Some(dashboard) = app.get_webview("main") {
+                platform::detach_surface(&dashboard)?;
+            }
+            return Ok(());
+        }
+        if let Some(dashboard) = app.get_webview("main") {
+            platform::prepare_surface(&dashboard).await?;
+        }
         let window = app
             .get_window("main")
             .ok_or_else(|| "The dashboard window is unavailable.".to_string())?;

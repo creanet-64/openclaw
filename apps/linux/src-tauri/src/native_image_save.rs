@@ -53,6 +53,7 @@ pub async fn native_image_save(
     if webview.label() != "main" || !crate::window_chrome::authorized(&app, &webview) {
         return Err("Image saving is unavailable for this page.".into());
     }
+    let document = crate::native_attachment_files::capture_document(&app, webview.label())?;
     let file_name = suggested_name(&file_name)?.to_string();
     if bytes_base64.len() > ((MAX_IMAGE_BYTES + 2) / 3) * 4 + 4 {
         return Err("Image exceeds the 32 MiB limit.".into());
@@ -96,9 +97,22 @@ pub async fn native_image_save(
     else {
         return Ok(false);
     };
-    tauri::async_runtime::spawn_blocking(move || write_image(destination, bytes))
-        .await
-        .map_err(|error| format!("Image save task failed: {error}"))??;
+    let write_app = app.clone();
+    let write_webview = webview.clone();
+    let label = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::window_chrome::authorized(&write_app, &write_webview) {
+            return Err("The image page is no longer authorized.".to_string());
+        }
+        crate::native_attachment_files::with_document_authority(
+            &write_app,
+            &label,
+            &document,
+            || write_image(destination, bytes),
+        )
+    })
+    .await
+    .map_err(|error| format!("Image save task failed: {error}"))??;
     Ok(true)
 }
 
