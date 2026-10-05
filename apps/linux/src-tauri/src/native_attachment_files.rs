@@ -3,6 +3,7 @@ use base64::Engine as _;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -293,13 +294,17 @@ fn read_files(paths: Vec<PathBuf>) -> Result<Vec<NativeAttachmentFile>, String> 
     let mut total = 0_u64;
     let mut result = Vec::with_capacity(paths.len());
     for path in paths {
-        let file =
-            std::fs::File::open(&path).map_err(|_| "A selected file cannot be read".to_string())?;
+        // A FIFO without a writer must not block while attachment authority is held.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|_| "A selected file cannot be read".to_string())?;
         let metadata = file
             .metadata()
             .map_err(|_| "A selected file cannot be read".to_string())?;
         if !metadata.is_file() {
-            return Err("Directories cannot be attached".to_string());
+            return Err("Only regular files can be attached".to_string());
         }
         let remaining = MAX_BATCH_BYTES - total;
         let limit = MAX_FILE_BYTES.min(remaining);
@@ -541,6 +546,23 @@ mod tests {
     fn rejects_directories_and_oversized_batches() {
         assert!(read_files(vec![std::env::temp_dir()]).is_err());
         assert!(read_files(vec![PathBuf::from("ignored"); MAX_FILES + 1]).is_err());
+    }
+
+    #[test]
+    fn rejects_fifo_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::env::temp_dir().join(format!(
+            "openclaw-attachment-fifo-test-{}",
+            std::process::id()
+        ));
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let result = read_files(vec![path.clone()]);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            result.err().as_deref(),
+            Some("Only regular files can be attached")
+        );
     }
 
     #[test]
