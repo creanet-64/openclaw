@@ -277,13 +277,16 @@ describe("sidebar child snapshot freshness", () => {
 
   it("retires collapsed child state after an event refresh finishes", async () => {
     const { harness, sidebar, publishChildChanged, expand } = await mountParent();
-    harness.list.mockResolvedValueOnce(
+    let childResponse: Promise<SessionsListResult> = Promise.resolve(
       result([{ ...child, status: "running", hasActiveRun: true }]),
+    );
+    harness.list.mockImplementation((options) =>
+      options?.source === "agent-roster" ? Promise.resolve(result([parentRow])) : childResponse,
     );
     expand();
     await waitForFast(() => expect(sidebar.textContent).toContain(child.label));
     const refresh = deferred<SessionsListResult>();
-    harness.list.mockReturnValueOnce(refresh.promise);
+    childResponse = refresh.promise;
     vi.useFakeTimers();
     try {
       publishChildChanged();

@@ -80,6 +80,7 @@ describe("sidebar session feedback", () => {
     const now = Date.now();
     const known = session("recent", now - 5, { unread: true });
     const { sidebar, context, result } = await mountRoster(roster, [session("main", now)]);
+    const unreadSidebar = sidebar as typeof sidebar & { agentUnreadCount(id: string): number };
     result.hasMore = true;
     sidebar.sessionData.sessionResultsByAgent.recent = {
       ...result,
@@ -89,14 +90,14 @@ describe("sidebar session feedback", () => {
     await vi.dynamicImportSettled();
     await rosterActivityStore(context).refresh();
     await sidebar.updateComplete;
-    expect(sidebar.agentUnreadCount("recent")).toBe(1);
+    expect(unreadSidebar.agentUnreadCount("recent")).toBe(1);
 
     // A newer shared row is authoritative for the same key, even when the
     // per-agent cache still holds an unread copy.
     result.sessions.push({ ...known, unread: false });
     await rosterActivityStore(context).refresh();
     await sidebar.updateComplete;
-    expect(sidebar.agentUnreadCount("recent")).toBe(0);
+    expect(unreadSidebar.agentUnreadCount("recent")).toBe(0);
   });
 
   it("shows pending append, blocks repeated activation, and recovers after failure and retry", async () => {
