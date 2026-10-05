@@ -19,6 +19,10 @@ import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import "./app-sidebar.ts";
 
+function childReadCount(harness: ReturnType<typeof createSessionsHarness>): number {
+  return harness.list.mock.calls.filter(([options]) => options?.source !== "agent-roster").length;
+}
+
 const parentKey = "agent:main:parent";
 const childKey = "agent:worker:child";
 const parentRow = { key: parentKey, kind: "direct" as const, childSessions: [childKey] };
@@ -300,7 +304,7 @@ describe("sidebar child snapshot freshness", () => {
           .querySelector("[data-child-session-toggle]")
           ?.classList.contains("sidebar-child-session-toggle--running"),
       ).toBe(false);
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(childReadCount(harness)).toBe(2);
     } finally {
       refresh.resolve(result([child]));
       vi.useRealTimers();
@@ -322,7 +326,7 @@ describe("sidebar child snapshot freshness", () => {
     try {
       publishChildChanged();
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(childReadCount(harness)).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -353,10 +357,10 @@ describe("sidebar child snapshot freshness", () => {
     await waitForFast(() => expect(sidebar.textContent).toContain("Shared child failure"));
     vi.useFakeTimers();
     try {
-      expect(harness.list).toHaveBeenCalledTimes(1);
+      expect(childReadCount(harness)).toBe(1);
 
       await retry();
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(childReadCount(harness)).toBe(2);
     } finally {
       shared.dispose();
       vi.useRealTimers();
@@ -368,16 +372,16 @@ describe("sidebar child snapshot freshness", () => {
     harness.list.mockResolvedValue({ ...result([child]), totalCount: 2, hasMore: false });
     expand();
     await waitForFast(() => expect(sidebar.textContent).toContain("kept changing"));
-    expect(harness.list).toHaveBeenCalledTimes(4);
+    expect(childReadCount(harness)).toBe(4);
     vi.useFakeTimers();
     try {
       publishChildChanged();
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(harness.list).toHaveBeenCalledTimes(4);
+      expect(childReadCount(harness)).toBe(4);
       expect(sidebar.textContent).toContain("kept changing");
 
       await retry();
-      expect(harness.list).toHaveBeenCalledTimes(5);
+      expect(childReadCount(harness)).toBe(5);
     } finally {
       vi.useRealTimers();
     }
@@ -387,7 +391,18 @@ describe("sidebar child snapshot freshness", () => {
     const { harness, sidebar, publishChildChanged, expand } = await mountParent();
     const initial = deferred<SessionsListResult>();
     const queued = deferred<SessionsListResult>();
-    harness.list.mockReturnValueOnce(initial.promise).mockReturnValueOnce(queued.promise);
+    let childReadIndex = 0;
+    harness.list.mockImplementation((options) => {
+      if (options?.source === "agent-roster") {
+        return Promise.resolve(result([parentRow]));
+      }
+      childReadIndex += 1;
+      return childReadIndex === 1
+        ? initial.promise
+        : childReadIndex === 2
+          ? queued.promise
+          : Promise.resolve(result([{ ...child, label: "Recovered child", updatedAt: 30 }]));
+    });
     const load = sidebar.sessionData.loadChildSessions(parentKey);
     expand();
     await sidebar.updateComplete;
@@ -395,12 +410,12 @@ describe("sidebar child snapshot freshness", () => {
     try {
       publishChildChanged();
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(harness.list).toHaveBeenCalledTimes(1);
+      expect(childReadCount(harness)).toBe(1);
       initial.resolve(result([child]));
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(harness.list).toHaveBeenCalledTimes(1);
+      expect(childReadCount(harness)).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(childReadCount(harness)).toBe(2);
       await load;
       queued.reject(new Error("Child refresh failed"));
       await vi.advanceTimersByTimeAsync(0);
@@ -415,14 +430,11 @@ describe("sidebar child snapshot freshness", () => {
 
       publishChildChanged();
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(childReadCount(harness)).toBe(2);
       expect(sidebar.sessionData.childSessionErrorsByParent.get(parentKey)).toBe(
         "Child refresh failed",
       );
 
-      harness.list.mockResolvedValueOnce(
-        result([{ ...child, label: "Recovered child", updatedAt: 30 }]),
-      );
       sidebar.sessionData.retryChildSessions(parentKey);
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;

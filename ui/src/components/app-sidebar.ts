@@ -88,10 +88,22 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     if (this.sidebarAgentsMode === "chip" && this.context && this.unreadActivityFactory) {
       const snapshot = this.unreadActivityFactory(this.context).snapshot;
       if (snapshot.result) {
-        return (
-          snapshot.cards.find((card) => normalizeAgentId(card.id) === normalizeAgentId(agentId))
-            ?.unreadCount ?? 0
-        );
+        const normalized = normalizeAgentId(agentId);
+        const visibleUnread =
+          snapshot.cards.find((card) => normalizeAgentId(card.id) === normalized)?.unreadCount ?? 0;
+        if (!snapshot.result.hasMore) {
+          return visibleUnread;
+        }
+        // The shared roster stops at 300 rows. Absence from that window does
+        // not clear a known unread row in the per-agent cache; shared rows win
+        // when both windows contain the same key (including newer read acks).
+        const sharedKeys = new Set(snapshot.result.sessions.map((row) => row.key));
+        const omittedUnread = (
+          this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []
+        ).filter(
+          (row) => row.unread === true && row.archived !== true && !sharedKeys.has(row.key),
+        ).length;
+        return visibleUnread + omittedUnread;
       }
     }
     return super.agentUnreadCount(agentId);

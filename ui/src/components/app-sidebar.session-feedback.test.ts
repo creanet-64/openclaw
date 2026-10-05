@@ -76,6 +76,29 @@ describe("sidebar session feedback", () => {
       expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).toBeNull(),
     );
   });
+  it("preserves a known unread session omitted from a truncated shared roster", async () => {
+    const now = Date.now();
+    const known = session("recent", now - 5, { unread: true });
+    const { sidebar, context, result } = await mountRoster(roster, [session("main", now)]);
+    result.hasMore = true;
+    sidebar.sessionData.sessionResultsByAgent.recent = {
+      ...result,
+      sessions: [known],
+      count: 1,
+    };
+    await vi.dynamicImportSettled();
+    await rosterActivityStore(context).refresh();
+    await sidebar.updateComplete;
+    expect(sidebar.agentUnreadCount("recent")).toBe(1);
+
+    // A newer shared row is authoritative for the same key, even when the
+    // per-agent cache still holds an unread copy.
+    result.sessions.push({ ...known, unread: false });
+    await rosterActivityStore(context).refresh();
+    await sidebar.updateComplete;
+    expect(sidebar.agentUnreadCount("recent")).toBe(0);
+  });
+
   it("shows pending append, blocks repeated activation, and recovers after failure and retry", async () => {
     const keys = Array.from(
       { length: SIDEBAR_SESSION_PAGE_SIZE + 1 },

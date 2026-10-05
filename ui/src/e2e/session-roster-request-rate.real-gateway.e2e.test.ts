@@ -157,11 +157,18 @@ suite.define(() => {
               params.includeDerivedTitles === undefined &&
               params.includeLastMessage === undefined,
           );
-        const primaryReads = () => lists.filter(({ params }) => params.includeLastMessage === true);
+        const primaryReads = () =>
+          lists.filter(
+            ({ params }) => params.includeLastMessage === true && params.source !== "agent-roster",
+          );
+        const agentRosterReads = () =>
+          lists.filter(({ params }) => params.source === "agent-roster");
         const pageBefore = pageReads().length;
         const primaryBefore = primaryReads().length;
+        const agentRosterBefore = agentRosterReads().length;
         expect(pageBefore).toBeGreaterThan(0);
         expect(primaryBefore).toBeGreaterThan(0);
+        expect(agentRosterBefore).toBeGreaterThan(0);
         const before = [...lists];
         await patch(key, "First rate update");
         await roster.getByText("First rate update", { exact: true }).waitFor();
@@ -182,6 +189,7 @@ suite.define(() => {
           .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
           .toContain("Trailing rate update 2");
         expect(primaryReads()).toHaveLength(primaryBefore + 1);
+        expect(agentRosterReads()).toHaveLength(agentRosterBefore + 1);
         expect(lists.every(({ params }) => params.rowMode === "compact" && params.source)).toBe(
           true,
         );
@@ -202,6 +210,7 @@ suite.define(() => {
         expect(pageReads()).toHaveLength(pageBefore + 1);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
         expect(primaryReads()).toHaveLength(primaryBefore + 1);
+        expect(agentRosterReads()).toHaveLength(agentRosterBefore + 1);
         await page.clock.resume();
       });
     } finally {
